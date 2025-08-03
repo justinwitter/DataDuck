@@ -39,11 +39,11 @@ def init_google_sheets():
         # Initialize headers if sheet is empty
         try:
             headers = worksheet.row_values(1)
-            if not headers or headers != ['winner', 'date', 'week', 'year', 'notes']:
+            if not headers or headers != ['winner', 'date']:
                 worksheet.clear()
-                worksheet.append_row(['winner', 'date', 'week', 'year', 'notes'])
+                worksheet.append_row(['winner', 'date'])
         except Exception:
-            worksheet.append_row(['winner', 'date', 'week', 'year', 'notes'])
+            worksheet.append_row(['winner', 'date'])
         
         return worksheet
     except Exception as e:
@@ -65,7 +65,7 @@ def load_data():
         st.error(f"Error loading data from Google Sheets: {str(e)}")
         return []
 
-def save_winner_to_sheets(winner_name, race_date, notes=""):
+def save_winner_to_sheets(winner_name, race_date):
     """Add a new winner directly to Google Sheets"""
     worksheet = init_google_sheets()
     if worksheet is None:
@@ -74,10 +74,7 @@ def save_winner_to_sheets(winner_name, race_date, notes=""):
     try:
         new_row = [
             winner_name,
-            race_date.isoformat(),
-            race_date.isocalendar()[1],  # week number
-            race_date.year,
-            notes
+            race_date.isoformat()
         ]
         worksheet.append_row(new_row)
         return True
@@ -93,6 +90,10 @@ def get_stats():
     
     df = pd.DataFrame(data)
     df['date'] = pd.to_datetime(df['date'])
+    
+    # Calculate week and year from date
+    df['week'] = df['date'].dt.isocalendar().week
+    df['year'] = df['date'].dt.year
     
     stats = {
         'total_races': len(data),
@@ -240,12 +241,12 @@ with tab2:
         race_date = st.date_input("Race Date", value=date.today())
     
     with col2:
-        notes = st.text_area("Notes (optional)", placeholder="Any additional notes about this race...")
+        st.info("📊 **Simplified Data Storage**\n\nOnly winner name and date are stored in Google Sheets for simplicity.")
     
     if st.button("🏆 Add Winner", type="primary"):
         if winner_name.strip():
             with st.spinner("Saving to Google Sheets..."):
-                if save_winner_to_sheets(winner_name.strip(), race_date, notes):
+                if save_winner_to_sheets(winner_name.strip(), race_date):
                     st.success(f"🎉 {winner_name} added as champion for {race_date}!")
                     st.balloons()
                     # Clear the cache to refresh data
@@ -262,7 +263,7 @@ with tab2:
         if data:
             recent_df = pd.DataFrame(data).tail(5)
             recent_df['date'] = pd.to_datetime(recent_df['date']).dt.strftime('%Y-%m-%d')
-            st.dataframe(recent_df[['winner', 'date', 'notes']], use_container_width=True)
+            st.dataframe(recent_df[['winner', 'date']], use_container_width=True)
         else:
             st.info("No winners recorded yet!")
 
