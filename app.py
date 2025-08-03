@@ -4,9 +4,10 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, date
-import json
-import os
+import gspread
+from google.oauth2.service_account import Credentials
 from collections import Counter
+import json
 
 # Set page config
 st.set_page_config(
@@ -15,34 +16,74 @@ st.set_page_config(
     layout="wide"
 )
 
-# File to store winner data
-DATA_FILE = "duck_race_winners.json"
+# Google Sheets configuration
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+@st.cache_resource
+def init_google_sheets():
+    """Initialize Google Sheets connection"""
+    try:
+        # Get credentials from Streamlit secrets
+        creds_dict = st.secrets["google_sheets"]
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        
+        # Open the spreadsheet (you'll need to create this and share it with your service account)
+        sheet_url = st.secrets["sheet_url"]  # Store your Google Sheet URL in secrets
+        spreadsheet = client.open_by_url(sheet_url)
+        worksheet = spreadsheet.sheet1  # Use the first worksheet
+        
+        # Initialize headers if sheet is empty
+        try:
+            headers = worksheet.row_values(1)
+            if not headers or headers != ['winner', 'date', 'week', 'year', 'notes']:
+                worksheet.clear()
+                worksheet.append_row(['winner', 'date', 'week', 'year', 'notes'])
+        except Exception:
+            worksheet.append_row(['winner', 'date', 'week', 'year', 'notes'])
+        
+        return worksheet
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {str(e)}")
+        st.error("Please check your Google Sheets credentials in Streamlit secrets.")
+        return None
 
 def load_data():
-    """Load winner data from JSON file"""
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    return []
+    """Load winner data from Google Sheets"""
+    worksheet = init_google_sheets()
+    if worksheet is None:
+        return []
+    
+    try:
+        # Get all records (skip header row)
+        records = worksheet.get_all_records()
+        return records
+    except Exception as e:
+        st.error(f"Error loading data from Google Sheets: {str(e)}")
+        return []
 
-def save_data(data):
-    """Save winner data to JSON file"""
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f, indent=2)
-
-def add_winner(winner_name, race_date, notes=""):
-    """Add a new winner to the data"""
-    data = load_data()
-    new_entry = {
-        "winner": winner_name,
-        "date": race_date.isoformat(),
-        "week": race_date.isocalendar()[1],
-        "year": race_date.year,
-        "notes": notes
-    }
-    data.append(new_entry)
-    save_data(data)
-    return True
+def save_winner_to_sheets(winner_name, race_date, notes=""):
+    """Add a new winner directly to Google Sheets"""
+    worksheet = init_google_sheets()
+    if worksheet is None:
+        return False
+    
+    try:
+        new_row = [
+            winner_name,
+            race_date.isoformat(),
+            race_date.isocalendar()[1],  # week number
+            race_date.year,
+            notes
+        ]
+        worksheet.append_row(new_row)
+        return True
+    except Exception as e:
+        st.error(f"Error saving to Google Sheets: {str(e)}")
+        return False
 
 def get_stats():
     """Calculate various statistics from the winner data"""
@@ -77,8 +118,61 @@ def get_stats():
     
     return stats
 
+# Show setup instructions if Google Sheets is not configured
+if 'google_sheets' not in st.secrets or 'sheet_url' not in st.secrets:
+    st.error("🔧 **Google Sheets Setup Required**")
+    st.markdown("""
+    To use this app with Google Sheets, you need to:
+    
+    1. **Create a Google Sheet** for storing duck race data
+    2. **Set up a Google Service Account** with Sheets API access
+    3. **Configure Streamlit Secrets** with your credentials
+    
+    ### Step-by-step setup:
+    
+    #### 1. Create Google Service Account:
+    - Go to [Google Cloud Console](https://console.cloud.google.com/)
+    - Create a new project or select existing one
+    - Enable Google Sheets API and Google Drive API
+    - Create a Service Account and download the JSON key file
+    
+    #### 2. Create Google Sheet:
+    - Create a new Google Sheet
+    - Share it with your service account email (found in the JSON file)
+    - Give it edit permissions
+    - Copy the sheet URL
+    
+    #### 3. Configure Streamlit Secrets:
+    Add to your `.streamlit/secrets.toml` file:
+    ```toml
+    sheet_url = "your_google_sheet_url_here"
+    
+    [google_sheets]
+    type = "service_account"
+    project_id = "your_project_id"
+    private_key_id = "your_private_key_id"
+    private_key = "-----BEGIN PRIVATE KEY-----\\nYOUR_PRIVATE_KEY\\n-----END PRIVATE KEY-----\\n"
+    client_email = "your_service_account_email"
+    client_id = "your_client_id"
+    auth_uri = "https://accounts.google.com/o/oauth2/auth"
+    token_uri = "https://oauth2.googleapis.com/token"
+    auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+    client_x509_cert_url = "your_cert_url"
+    ```
+    """)
+    st.stop()
+
 # Main app
 st.title("🦆 Duck Race Champion Tracker 🏆")
+st.caption("📊 Data stored in Google Sheets - accessible from anywhere!")
+
+# Test connection
+worksheet = init_google_sheets()
+if worksheet:
+    st.success("✅ Connected to Google Sheets successfully!")
+else:
+    st.error("❌ Failed to connect to Google Sheets. Check your configuration.")
+    st.stop()
 
 # Create tabs
 tab1, tab2, tab3 = st.tabs(["🏁 Duck Race", "📝 Add Winner", "📊 Champions Wall"])
@@ -137,7 +231,7 @@ with tab1:
     st.success("**🏆 After playing the race, return here and go to the 'Add Winner' tab to record the champion!**")
 
 with tab2:
-    st.header("Add New Winner")
+    st.header("📝 Add New Winner")
     
     col1, col2 = st.columns(2)
     
@@ -149,29 +243,34 @@ with tab2:
         notes = st.text_area("Notes (optional)", placeholder="Any additional notes about this race...")
     
     if st.button("🏆 Add Winner", type="primary"):
-        if winner_name:
-            if add_winner(winner_name, race_date, notes):
-                st.success(f"🎉 {winner_name} added as champion for {race_date}!")
-                st.balloons()
-            else:
-                st.error("Failed to add winner. Please try again.")
+        if winner_name.strip():
+            with st.spinner("Saving to Google Sheets..."):
+                if save_winner_to_sheets(winner_name.strip(), race_date, notes):
+                    st.success(f"🎉 {winner_name} added as champion for {race_date}!")
+                    st.balloons()
+                    # Clear the cache to refresh data
+                    st.cache_data.clear()
+                else:
+                    st.error("Failed to add winner. Please check your Google Sheets connection.")
         else:
             st.error("Please enter a winner name.")
     
     # Show recent entries
-    st.subheader("Recent Winners")
-    data = load_data()
-    if data:
-        recent_df = pd.DataFrame(data).tail(5)
-        recent_df['date'] = pd.to_datetime(recent_df['date']).dt.strftime('%Y-%m-%d')
-        st.dataframe(recent_df[['winner', 'date', 'notes']], use_container_width=True)
-    else:
-        st.info("No winners recorded yet!")
+    st.subheader("🕐 Recent Winners")
+    with st.spinner("Loading recent winners..."):
+        data = load_data()
+        if data:
+            recent_df = pd.DataFrame(data).tail(5)
+            recent_df['date'] = pd.to_datetime(recent_df['date']).dt.strftime('%Y-%m-%d')
+            st.dataframe(recent_df[['winner', 'date', 'notes']], use_container_width=True)
+        else:
+            st.info("No winners recorded yet!")
 
 with tab3:
     st.header("🏆 Champions Wall & Statistics")
     
-    stats = get_stats()
+    with st.spinner("Loading statistics from Google Sheets..."):
+        stats = get_stats()
     
     if stats is None:
         st.info("No race data available yet. Add some winners to see amazing stats!")
@@ -282,7 +381,7 @@ with tab3:
 with st.sidebar:
     st.header("About Duck Race Tracker")
     st.markdown("""
-    This app helps you track weekly duck race winners and shows amazing statistics!
+    This app helps you track weekly duck race winners with **Google Sheets integration**!
     
     **Features:**
     - 🏁 Access to the duck race game
@@ -290,12 +389,32 @@ with st.sidebar:
     - 📊 Comprehensive statistics
     - 🏆 Hall of Fame system
     - 📈 Visual charts and graphs
+    - ☁️ **Cloud storage with Google Sheets**
     
     **How to use:**
     1. Play the duck race game in the first tab
     2. Record the winner in the second tab
     3. View awesome stats in the third tab
+    
+    **Data Storage:**
+    All data is stored in Google Sheets, making it:
+    - ✅ Persistent across sessions
+    - ✅ Accessible from anywhere
+    - ✅ Easy to backup and share
+    - ✅ Editable directly in Google Sheets if needed
     """)
+    
+    st.divider()
+    
+    # Google Sheets info
+    st.subheader("📊 Google Sheets Integration")
+    if worksheet:
+        st.success("✅ Connected to Google Sheets")
+        if st.button("🔄 Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
+    else:
+        st.error("❌ Not connected to Google Sheets")
     
     st.divider()
     
