@@ -1,2 +1,4 @@
 plotly==6.1.2
 gspread==6.2.1
+seaborn==0.13.2
+matplotlib==3.9.4
