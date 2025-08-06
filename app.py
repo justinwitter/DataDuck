@@ -251,22 +251,11 @@ with tab1:
     if 'player_names' not in st.session_state:
         st.session_state.player_names = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
     
-    col1, col2 = st.columns([2, 1])
+    # Initialize reset counter for forcing text area refresh
+    if 'reset_counter' not in st.session_state:
+        st.session_state.reset_counter = 0
     
-    with col1:
-        st.subheader("📝 Edit Player List:")
-        
-        # Text area for editing names
-        names_text = st.text_area(
-            "Player Names (one per line):",
-            value="\n".join(st.session_state.player_names),
-            height=300,
-            help="Add or remove names. Each name should be on a separate line."
-        )
-        
-        # Update session state when text changes
-        if names_text:
-            st.session_state.player_names = [name.strip() for name in names_text.split('\n') if name.strip()]
+    col1, col2 = st.columns([2, 1])
     
     with col2:
         st.subheader("🎮 Quick Actions:")
@@ -274,6 +263,7 @@ with tab1:
         # Reset to default button
         if st.button("🔄 Reset to Default", help="Reset to the original 10 players"):
             st.session_state.player_names = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
+            st.session_state.reset_counter += 1  # Increment to force text area refresh
             st.rerun()
         
         # Add new player
@@ -287,6 +277,24 @@ with tab1:
         
         # Show count
         st.metric("Total Players", len(st.session_state.player_names))
+    
+    with col1:
+        st.subheader("📝 Edit Player List:")
+        
+        # Text area for editing names with dynamic key to force refresh on reset
+        names_text = st.text_area(
+            "Player Names (one per line):",
+            value="\n".join(st.session_state.player_names),
+            height=300,
+            help="Add or remove names. Each name should be on a separate line.",
+            key=f"player_names_text_{st.session_state.reset_counter}"
+        )
+        
+        # Update session state when text changes
+        if names_text:
+            new_names = [name.strip() for name in names_text.split('\n') if name.strip()]
+            if new_names != st.session_state.player_names:
+                st.session_state.player_names = new_names
 
 with tab2:
     st.header("📝 Add New Winner")
