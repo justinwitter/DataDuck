@@ -168,13 +168,13 @@ def calculate_statistics():
 
 # Show setup instructions if Google Sheets is not configured
 if 'google_sheets' not in st.secrets or 'sheet_url' not in st.secrets:
-    st.error("🔧 **Google Sheets Setup Required**")
+    st.error("🔧 Google Sheets Setup Required")
     st.markdown("""
     To use this app with Google Sheets, you need to:
     
-    1. **Create a Google Sheet** for storing duck race data
-    2. **Set up a Google Service Account** with Sheets API access
-    3. **Configure Streamlit Secrets** with your credentials
+    1. Create a Google Sheet for storing duck race data
+    2. Set up a Google Service Account with Sheets API access
+    3. Configure Streamlit Secrets with your credentials
     
     ### Step-by-step setup:
     
@@ -255,6 +255,10 @@ with tab1:
     if 'reset_counter' not in st.session_state:
         st.session_state.reset_counter = 0
     
+    # Initialize previous text state to detect changes
+    if 'prev_text' not in st.session_state:
+        st.session_state.prev_text = "\n".join(st.session_state.player_names)
+    
     col1, col2 = st.columns([2, 1])
     
     with col2:
@@ -263,6 +267,7 @@ with tab1:
         # Reset to default button
         if st.button("🔄 Reset to Default", help="Reset to the original 10 players"):
             st.session_state.player_names = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
+            st.session_state.prev_text = "\n".join(st.session_state.player_names)
             st.session_state.reset_counter += 1  # Increment to force text area refresh
             st.rerun()
         
@@ -271,11 +276,12 @@ with tab1:
         if st.button("➕ Add Player") and new_player.strip():
             if new_player.strip() not in st.session_state.player_names:
                 st.session_state.player_names.append(new_player.strip())
+                st.session_state.prev_text = "\n".join(st.session_state.player_names)
                 st.rerun()
             else:
                 st.warning("Player already in list!")
         
-        # Show count
+        # Show count (this will now update properly)
         st.metric("Total Players", len(st.session_state.player_names))
     
     with col1:
@@ -290,11 +296,12 @@ with tab1:
             key=f"player_names_text_{st.session_state.reset_counter}"
         )
         
-        # Update session state when text changes
-        if names_text:
+        # Check if text has changed and update session state
+        if names_text != st.session_state.prev_text:
             new_names = [name.strip() for name in names_text.split('\n') if name.strip()]
-            if new_names != st.session_state.player_names:
-                st.session_state.player_names = new_names
+            st.session_state.player_names = new_names
+            st.session_state.prev_text = names_text
+            st.rerun()  # Force rerun to update the metric
 
 with tab2:
     st.header("📝 Add New Winner")
@@ -302,16 +309,27 @@ with tab2:
     col1, col2 = st.columns(2)
     
     with col1:
-        winner_name = st.text_input("Winner Name", placeholder="Enter the champion's name")
+        # Create dropdown with player names from session state
+        if st.session_state.player_names:
+            winner_name = st.selectbox(
+                "Select Winner",
+                options=st.session_state.player_names,
+                help="Choose the winner from your player list"
+            )
+        else:
+            st.warning("No players in the list! Please add players in the Duck Race tab first.")
+            winner_name = None
+        
         race_date = st.date_input("Race Date", value=date.today())
     
     with col2:
-        st.info("📊 **Simplified Data Storage**\n\nOnly winner name and date are stored in Google Sheets for simplicity.")
+        # Show current player count for context
+        st.info(f"📊 {len(st.session_state.player_names)} players available to select from.\n\nAdd or edit players in the Duck Race tab if needed.")
     
     if st.button("🏆 Add Winner", type="primary"):
-        if winner_name.strip():
+        if winner_name:
             with st.spinner("Saving to Google Sheets..."):
-                if save_winner_to_sheets(winner_name.strip(), race_date):
+                if save_winner_to_sheets(winner_name, race_date):
                     st.success(f"🎉 {winner_name} added as champion for {race_date}!")
                     st.balloons()
                     # Clear the cache to refresh data
@@ -319,7 +337,7 @@ with tab2:
                 else:
                     st.error("Failed to add winner. Please check your Google Sheets connection.")
         else:
-            st.error("Please enter a winner name.")
+            st.error("Please select a winner from the dropdown.")
     
     # Show recent entries
     st.subheader("🕐 Recent Winners")
@@ -565,7 +583,7 @@ with tab3:
 with st.sidebar:
     st.header("About Duck Race Tracker")
     st.markdown("""
-    This app helps you track weekly duck race winners with **Google Sheets integration**!
+    This app helps you track weekly duck race winners with Google Sheets integration!
     
     **Features:**
     - 🏁 Access to the duck race game
@@ -573,7 +591,7 @@ with st.sidebar:
     - 📊 Comprehensive statistics
     - 🏆 Hall of Fame system
     - 📈 Visual charts and graphs
-    - ☁️ **Cloud storage with Google Sheets**
+    - ☁️ Cloud storage with Google Sheets
     
     **How to use:**
     1. Play the duck race game in the first tab
