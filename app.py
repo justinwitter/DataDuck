@@ -27,6 +27,10 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive"
 ]
 
+# Initialize team selection in session state
+if 'selected_team' not in st.session_state:
+    st.session_state.selected_team = "Clean Room"  # Default team
+
 @st.cache_resource
 def init_google_sheets():
     """Initialize Google Sheets connection"""
@@ -39,7 +43,26 @@ def init_google_sheets():
         # Open the spreadsheet (you'll need to create this and share it with your service account)
         sheet_url = st.secrets["sheet_url"]  # Store your Google Sheet URL in secrets
         spreadsheet = client.open_by_url(sheet_url)
-        worksheet = spreadsheet.sheet1  # Use the first worksheet
+        
+        return spreadsheet, client
+    except Exception as e:
+        st.error(f"Failed to connect to Google Sheets: {str(e)}")
+        st.error("Please check your Google Sheets credentials in Streamlit secrets.")
+        return None, None
+
+def get_or_create_worksheet(team_name):
+    """Get or create worksheet for the selected team"""
+    spreadsheet, client = init_google_sheets()
+    if spreadsheet is None:
+        return None
+    
+    try:
+        # Try to get the worksheet by team name
+        try:
+            worksheet = spreadsheet.worksheet(team_name)
+        except gspread.WorksheetNotFound:
+            # Create the worksheet if it doesn't exist
+            worksheet = spreadsheet.add_worksheet(title=team_name, rows="100", cols="20")
         
         # Initialize headers if sheet is empty
         try:
@@ -52,13 +75,12 @@ def init_google_sheets():
         
         return worksheet
     except Exception as e:
-        st.error(f"Failed to connect to Google Sheets: {str(e)}")
-        st.error("Please check your Google Sheets credentials in Streamlit secrets.")
+        st.error(f"Failed to access worksheet for {team_name}: {str(e)}")
         return None
 
 def load_data():
-    """Load winner data from Google Sheets"""
-    worksheet = init_google_sheets()
+    """Load winner data from Google Sheets for selected team"""
+    worksheet = get_or_create_worksheet(st.session_state.selected_team)
     if worksheet is None:
         return []
     
@@ -67,12 +89,12 @@ def load_data():
         records = worksheet.get_all_records()
         return records
     except Exception as e:
-        st.error(f"Error loading data from Google Sheets: {str(e)}")
+        st.error(f"Error loading data from Google Sheets for {st.session_state.selected_team}: {str(e)}")
         return []
 
 def save_winner_to_sheets(winner_name, race_date):
-    """Add a new winner directly to Google Sheets"""
-    worksheet = init_google_sheets()
+    """Add a new winner directly to Google Sheets for selected team"""
+    worksheet = get_or_create_worksheet(st.session_state.selected_team)
     if worksheet is None:
         return False
     
@@ -84,7 +106,7 @@ def save_winner_to_sheets(winner_name, race_date):
         worksheet.append_row(new_row)
         return True
     except Exception as e:
-        st.error(f"Error saving to Google Sheets: {str(e)}")
+        st.error(f"Error saving to Google Sheets for {st.session_state.selected_team}: {str(e)}")
         return False
 
 def calculate_statistics():
@@ -214,13 +236,28 @@ if 'google_sheets' not in st.secrets or 'sheet_url' not in st.secrets:
 st.title("🦆 DataDuck 🦆")
 st.caption("Duck Race Tracker")
 
-# Test connection
-worksheet = init_google_sheets()
-if worksheet:
-    st.success("✅ Connected to database successfully!")
-else:
-    st.error("❌ Failed to connect to Google Sheets. Check your configuration.")
-    st.stop()
+# Team Selection and connection status inline
+col1, col2 = st.columns([3, 1])
+with col1:
+    # Test connection
+    worksheet = get_or_create_worksheet(st.session_state.selected_team)
+    if worksheet:
+        st.success(f"✅ Connected to {st.session_state.selected_team} team database successfully!")
+    else:
+        st.error("❌ Failed to connect to Google Sheets. Check your configuration.")
+        st.stop()
+
+with col2:
+    team_option = st.selectbox(
+        "Team:",
+        ["Clean Room", "Collab Cloud"],
+        index=0 if st.session_state.selected_team == "Clean Room" else 1,
+        key="team_selector"
+    )
+    if team_option != st.session_state.selected_team:
+        st.session_state.selected_team = team_option
+        st.cache_data.clear()  # Clear cache when switching teams
+        st.rerun()
 
 # Create tabs
 tab1, tab2, tab3 = st.tabs(["🏁 Duck Race", "📝 Add Winner", "🏆 Wall of Champions"])
@@ -247,17 +284,27 @@ with tab1:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # Initialize player names in session state
-    if 'player_names' not in st.session_state:
-        st.session_state.player_names = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
+    # Initialize player names in session state with team-specific keys
+    team_key = f'player_names_{st.session_state.selected_team.replace(" ", "_")}'
+    reset_key = f'reset_counter_{st.session_state.selected_team.replace(" ", "_")}'
+    prev_text_key = f'prev_text_{st.session_state.selected_team.replace(" ", "_")}'
+    
+    # Set default players based on team
+    if st.session_state.selected_team == "Clean Room":
+        default_players = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
+    else:  # Collab Cloud
+        default_players = ["Jeffrey", "Jacob", "Cate", "Ryan", "Bharathi", "Gerardo", "Jordan", "Mazie", "Derek"]
+    
+    if team_key not in st.session_state:
+        st.session_state[team_key] = default_players
     
     # Initialize reset counter for forcing text area refresh
-    if 'reset_counter' not in st.session_state:
-        st.session_state.reset_counter = 0
+    if reset_key not in st.session_state:
+        st.session_state[reset_key] = 0
     
     # Initialize previous text state to detect changes
-    if 'prev_text' not in st.session_state:
-        st.session_state.prev_text = "\n".join(st.session_state.player_names)
+    if prev_text_key not in st.session_state:
+        st.session_state[prev_text_key] = "\n".join(st.session_state[team_key])
     
     col1, col2 = st.columns([2, 1])
     
@@ -265,24 +312,24 @@ with tab1:
         st.subheader("🎮 Quick Actions:")
         
         # Reset to default button
-        if st.button("🔄 Reset to Default", help="Reset to the original 10 players"):
-            st.session_state.player_names = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
-            st.session_state.prev_text = "\n".join(st.session_state.player_names)
-            st.session_state.reset_counter += 1  # Increment to force text area refresh
+        if st.button("🔄 Reset to Default", help=f"Reset to the original players for {st.session_state.selected_team}"):
+            st.session_state[team_key] = default_players
+            st.session_state[prev_text_key] = "\n".join(st.session_state[team_key])
+            st.session_state[reset_key] += 1  # Increment to force text area refresh
             st.rerun()
         
         # Add new player
         new_player = st.text_input("Add New Player:", placeholder="Enter name")
         if st.button("➕ Add Player") and new_player.strip():
-            if new_player.strip() not in st.session_state.player_names:
-                st.session_state.player_names.append(new_player.strip())
-                st.session_state.prev_text = "\n".join(st.session_state.player_names)
+            if new_player.strip() not in st.session_state[team_key]:
+                st.session_state[team_key].append(new_player.strip())
+                st.session_state[prev_text_key] = "\n".join(st.session_state[team_key])
                 st.rerun()
             else:
                 st.warning("Player already in list!")
         
         # Show count (this will now update properly)
-        st.metric("Total Players", len(st.session_state.player_names))
+        st.metric("Total Players", len(st.session_state[team_key]))
     
     with col1:
         st.subheader("📝 Edit Player List:")
@@ -290,17 +337,17 @@ with tab1:
         # Text area for editing names with dynamic key to force refresh on reset
         names_text = st.text_area(
             "Player Names (one per line):",
-            value="\n".join(st.session_state.player_names),
+            value="\n".join(st.session_state[team_key]),
             height=300,
             help="Add or remove names. Each name should be on a separate line.",
-            key=f"player_names_text_{st.session_state.reset_counter}"
+            key=f"player_names_text_{st.session_state.selected_team.replace(' ', '_')}_{st.session_state[reset_key]}"
         )
         
         # Check if text has changed and update session state
-        if names_text != st.session_state.prev_text:
+        if names_text != st.session_state[prev_text_key]:
             new_names = [name.strip() for name in names_text.split('\n') if name.strip()]
-            st.session_state.player_names = new_names
-            st.session_state.prev_text = names_text
+            st.session_state[team_key] = new_names
+            st.session_state[prev_text_key] = names_text
             st.rerun()  # Force rerun to update the metric
 
 with tab2:
@@ -310,11 +357,12 @@ with tab2:
     
     with col1:
         # Create dropdown with player names from session state
-        if st.session_state.player_names:
+        current_team_players = st.session_state.get(team_key, [])
+        if current_team_players:
             winner_name = st.selectbox(
                 "Select Winner",
-                options=st.session_state.player_names,
-                help="Choose the winner from your player list"
+                options=current_team_players,
+                help=f"Choose the winner from your team player list"
             )
         else:
             st.warning("No players in the list! Please add players in the Duck Race tab first.")
@@ -324,11 +372,11 @@ with tab2:
     
     with col2:
         # Show current player count for context
-        st.info(f"📊 {len(st.session_state.player_names)} players available to select from.\n\nAdd or edit players in the Duck Race tab if needed.")
+        st.info(f"📊 {len(current_team_players)} players available to select from.\n\nAdd or edit players in the Duck Race tab if needed.")
     
     if st.button("🏆 Add Winner", type="primary"):
         if winner_name:
-            with st.spinner("Saving to Google Sheets..."):
+            with st.spinner("Saving to team sheet..."):
                 if save_winner_to_sheets(winner_name, race_date):
                     st.success(f"🎉 {winner_name} added as champion for {race_date}!")
                     st.balloons()
@@ -356,7 +404,7 @@ with tab2:
 with tab3:
     st.header("🏆 Champions Wall & Statistics")
     
-    with st.spinner("Loading statistics from Google Sheets..."):
+    with st.spinner("Loading statistics from team sheet..."):
         stats = calculate_statistics()
     
     if stats is None:
@@ -582,10 +630,13 @@ with tab3:
 # Sidebar with app info
 with st.sidebar:
     st.header("About Duck Race Tracker")
-    st.markdown("""
+    st.markdown(f"""
     This app helps you track weekly duck race winners with Google Sheets integration!
     
+    **Current Team:** **{st.session_state.selected_team}**
+    
     **Features:**
+    - 🏢 Team selection (Clean Room/Collab Cloud)
     - 🏁 Access to the duck race game
     - 📝 Easy winner entry
     - 📊 Comprehensive statistics
@@ -594,13 +645,15 @@ with st.sidebar:
     - ☁️ Cloud storage with Google Sheets
     
     **How to use:**
-    1. Play the duck race game in the first tab
-    2. Record the winner in the second tab
-    3. View awesome stats in the third tab
+    1. Select your team at the top
+    2. Play the duck race game in the first tab
+    3. Record the winner in the second tab
+    4. View awesome stats in the third tab
     
     **Data Storage:**
-    All data is stored in Google Sheets, making it:
+    All data is stored in separate Google Sheets tabs for each team:
     - ✅ Persistent across sessions
+    - ✅ Team-specific data tracking
     - ✅ Accessible from anywhere
     - ✅ Easy to backup and share
     - ✅ Editable directly in Google Sheets if needed
@@ -611,7 +664,7 @@ with st.sidebar:
     # Google Sheets info
     st.subheader("📊 Google Sheets Integration")
     if worksheet:
-        st.success("✅ Connected to Google Sheets")
+        st.success(f"✅ Connected to {st.session_state.selected_team} sheet")
         if st.button("🔄 Refresh Data"):
             st.cache_data.clear()
             st.rerun()
@@ -627,3 +680,12 @@ with st.sidebar:
         st.metric("Champions", stats['unique_winners'])
         if stats['current_champion']:
             st.success(f"Current Champion: {stats['current_champion']}")
+    
+    # Team switching shortcut
+    st.divider()
+    st.subheader("🔄 Quick Team Switch")
+    other_team = "Collab Cloud" if st.session_state.selected_team == "Clean Room" else "Clean Room"
+    if st.button(f"Switch to {other_team}", use_container_width=True):
+        st.session_state.selected_team = other_team
+        st.cache_data.clear()
+        st.rerun()
