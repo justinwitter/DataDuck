@@ -9,6 +9,7 @@ from google.oauth2.service_account import Credentials
 from collections import Counter
 import json
 import seaborn as sns
+import time
 
 # Set page config
 st.set_page_config(
@@ -30,6 +31,38 @@ SCOPES = [
 # Initialize team selection in session state
 if 'selected_team' not in st.session_state:
     st.session_state.selected_team = "Clean Room"  # Default team
+
+# Initialize API call tracking
+if 'api_call_times' not in st.session_state:
+    st.session_state.api_call_times = []
+
+# Rate limiting configuration
+MAX_API_CALLS_PER_MINUTE = 10  # Conservative limit
+MIN_TIME_BETWEEN_CALLS = 2  # Seconds between calls
+
+def check_rate_limit():
+    """Check if we can make an API call without hitting rate limits"""
+    current_time = time.time()
+    
+    # Remove calls older than 1 minute
+    st.session_state.api_call_times = [
+        call_time for call_time in st.session_state.api_call_times 
+        if current_time - call_time < 60
+    ]
+    
+    # Check if we're within rate limits
+    if len(st.session_state.api_call_times) >= MAX_API_CALLS_PER_MINUTE:
+        return False, "Rate limit reached. Please wait a minute before refreshing data."
+    
+    # Check minimum time between calls
+    if st.session_state.api_call_times and (current_time - st.session_state.api_call_times[-1]) < MIN_TIME_BETWEEN_CALLS:
+        return False, f"Please wait {MIN_TIME_BETWEEN_CALLS} seconds between data refreshes."
+    
+    return True, ""
+
+def record_api_call():
+    """Record that an API call was made"""
+    st.session_state.api_call_times.append(time.time())
 
 @st.cache_resource
 def init_google_sheets():
@@ -78,32 +111,68 @@ def get_or_create_worksheet(team_name):
         st.error(f"Failed to access worksheet for {team_name}: {str(e)}")
         return None
 
-def load_data():
-    """Load winner data from Google Sheets for selected team"""
-    worksheet = get_or_create_worksheet(st.session_state.selected_team)
+@st.cache_data(ttl=300)  # Cache for 5 minutes to reduce API calls
+def load_data(team_name):
+    """Load winner data from Google Sheets for selected team with caching and rate limiting"""
+    can_call, error_msg = check_rate_limit()
+    if not can_call:
+        # If we can't make API call due to rate limiting, try to use cached data
+        if f"cached_data_{team_name}" in st.session_state:
+            st.warning(f"Using cached data: {error_msg}")
+            return st.session_state[f"cached_data_{team_name}"]
+        else:
+            st.error(error_msg)
+            return []
+    
+    worksheet = get_or_create_worksheet(team_name)
     if worksheet is None:
         return []
     
     try:
+        # Record the API call
+        record_api_call()
+        
         # Get all records (skip header row)
         records = worksheet.get_all_records()
+        
+        # Cache the data in session state as backup
+        st.session_state[f"cached_data_{team_name}"] = records
+        
         return records
     except Exception as e:
-        st.error(f"Error loading data from Google Sheets for {st.session_state.selected_team}: {str(e)}")
-        return []
+        # If API call fails but we have cached data, use it
+        if f"cached_data_{team_name}" in st.session_state:
+            st.warning(f"API call failed, using cached data: {str(e)}")
+            return st.session_state[f"cached_data_{team_name}"]
+        else:
+            st.error(f"Error loading data from Google Sheets for {team_name}: {str(e)}")
+            return []
 
 def save_winner_to_sheets(winner_name, race_date):
-    """Add a new winner directly to Google Sheets for selected team"""
+    """Add a new winner directly to Google Sheets for selected team with rate limiting"""
+    can_call, error_msg = check_rate_limit()
+    if not can_call:
+        st.error(error_msg)
+        return False
+    
     worksheet = get_or_create_worksheet(st.session_state.selected_team)
     if worksheet is None:
         return False
     
     try:
+        # Record the API call
+        record_api_call()
+        
         new_row = [
             winner_name,
             race_date.isoformat()
         ]
         worksheet.append_row(new_row)
+        
+        # Clear cached data to force refresh
+        if f"cached_data_{st.session_state.selected_team}" in st.session_state:
+            del st.session_state[f"cached_data_{st.session_state.selected_team}"]
+        
         return True
     except Exception as e:
         st.error(f"Error saving to Google Sheets for {st.session_state.selected_team}: {str(e)}")
@@ -111,7 +180,7 @@ def save_winner_to_sheets(winner_name, race_date):
 
 def calculate_statistics():
     """Calculate comprehensive statistics from the winner data"""
-    data = load_data()
+    data = load_data(st.session_state.selected_team)
     
     if not data:
         return None
@@ -387,19 +456,78 @@ with tab2:
         else:
             st.error("Please select a winner from the dropdown.")
     
-    # Show recent entries
-    st.subheader("🕐 Recent Winners")
-    with st.spinner("Loading recent winners..."):
-        data = load_data()
-        if data:
-            recent_df = pd.DataFrame(data)
-            recent_df['date'] = pd.to_datetime(recent_df['date'])
-            # Sort by date descending to show most recent first, then take last 5
-            recent_df = recent_df.sort_values('date', ascending=False).head(5)
-            recent_df['date'] = recent_df['date'].dt.strftime('%Y-%m-%d')
-            st.dataframe(recent_df[['winner', 'date']], use_container_width=True)
+    # Show ALL entries instead of just recent ones
+    st.subheader("📊 All Race Results")
+    
+    # Add refresh button with rate limiting
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        if st.button("🔄 Refresh Data"):
+            can_refresh, msg = check_rate_limit()
+            if can_refresh:
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(msg)
+    
+    with col2:
+        # Show API rate limit status
+        remaining_calls = MAX_API_CALLS_PER_MINUTE - len(st.session_state.api_call_times)
+        if remaining_calls > 5:
+            st.success(f"✅ {remaining_calls} API calls remaining")
+        elif remaining_calls > 0:
+            st.warning(f"⚠️ {remaining_calls} API calls remaining")
         else:
-            st.info("No winners recorded yet!")
+            st.error("❌ Rate limit reached")
+    
+    with st.spinner("Loading all race results..."):
+        data = load_data(st.session_state.selected_team)
+        if data:
+            df = pd.DataFrame(data)
+            df['date'] = pd.to_datetime(df['date'])
+            
+            # Clean the data
+            df['winner'] = df['winner'].astype(str).str.strip()
+            df = df[
+                df['winner'].notna() & 
+                (df['winner'] != '') & 
+                (df['winner'] != 'nan') &
+                (df['winner'] != 'None')
+            ]
+            
+            if len(df) > 0:
+                # Sort by date descending to show most recent first
+                df_display = df.sort_values('date', ascending=False).copy()
+                df_display['date'] = df_display['date'].dt.strftime('%Y-%m-%d')
+                df_display = df_display.rename(columns={'winner': 'Champion', 'date': 'Date'})
+                df_display.index = range(1, len(df_display) + 1)  # Add row numbers starting from 1
+                
+                # Display with pagination for better performance
+                st.markdown(f"**Total Records: {len(df_display)}**")
+                
+                # Add search functionality
+                search_term = st.text_input("🔍 Search by champion name:", placeholder="Enter name to filter...")
+                if search_term:
+                    df_filtered = df_display[df_display['Champion'].str.contains(search_term, case=False, na=False)]
+                    st.markdown(f"**Filtered Results: {len(df_filtered)}**")
+                    st.dataframe(df_filtered, use_container_width=True)
+                else:
+                    # Show all data with pagination
+                    st.dataframe(df_display, use_container_width=True, height=400)
+                
+                # Additional statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Races", len(df))
+                with col2:
+                    st.metric("Unique Champions", df['winner'].nunique())
+                with col3:
+                    most_wins = df['winner'].value_counts().iloc[0] if len(df) > 0 else 0
+                    st.metric("Most Wins by One Player", most_wins)
+            else:
+                st.info("No valid race data found.")
+        else:
+            st.info("No winners recorded yet! Add some winners to see the complete race history.")
 
 with tab3:
     st.header("🏆 Champions Wall & Statistics")
@@ -643,6 +771,7 @@ with st.sidebar:
     - 🏆 Hall of Fame system
     - 📈 Visual charts and graphs
     - ☁️ Cloud storage with Google Sheets
+    - 🚦 Rate limiting to prevent API overuse
     
     **How to use:**
     1. Select your team at the top
@@ -661,13 +790,39 @@ with st.sidebar:
     
     st.divider()
     
+    # API Rate Limiting Status
+    st.subheader("🚦 API Status")
+    remaining_calls = MAX_API_CALLS_PER_MINUTE - len(st.session_state.api_call_times)
+    
+    if remaining_calls > 5:
+        st.success(f"✅ {remaining_calls}/{MAX_API_CALLS_PER_MINUTE} calls available")
+    elif remaining_calls > 0:
+        st.warning(f"⚠️ {remaining_calls}/{MAX_API_CALLS_PER_MINUTE} calls remaining")
+    else:
+        st.error(f"❌ Rate limit reached")
+        next_reset = 60 - (time.time() - min(st.session_state.api_call_times)) if st.session_state.api_call_times else 0
+        st.caption(f"Resets in ~{int(next_reset)} seconds")
+    
+    st.caption("Data is cached for 5 minutes to reduce API usage")
+    
+    st.divider()
+    
     # Google Sheets info
     st.subheader("📊 Google Sheets Integration")
     if worksheet:
         st.success(f"✅ Connected to {st.session_state.selected_team} sheet")
-        if st.button("🔄 Refresh Data"):
-            st.cache_data.clear()
-            st.rerun()
+        
+        # Manual refresh with rate limiting
+        can_refresh, msg = check_rate_limit()
+        if st.button("🔄 Force Refresh Data", disabled=not can_refresh):
+            if can_refresh:
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(msg)
+        
+        if not can_refresh:
+            st.caption("⏳ Refresh temporarily disabled due to rate limiting")
     else:
         st.error("❌ Not connected to Google Sheets")
     
@@ -676,10 +831,11 @@ with st.sidebar:
     # Quick stats in sidebar
     stats = calculate_statistics()
     if stats:
+        st.subheader("📈 Quick Stats")
         st.metric("Total Races", stats['total_races'])
         st.metric("Champions", stats['unique_winners'])
         if stats['current_champion']:
-            st.success(f"Current Champion: {stats['current_champion']}")
+            st.success(f"🏆 Current Champion: {stats['current_champion']}")
     
     # Team switching shortcut
     st.divider()
