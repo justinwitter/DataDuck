@@ -32,37 +32,63 @@ SCOPES = [
 if 'selected_team' not in st.session_state:
     st.session_state.selected_team = "Clean Room"  # Default team
 
-# Initialize API call tracking
+# Initialize API call tracking for rate limiting
 if 'api_call_times' not in st.session_state:
     st.session_state.api_call_times = []
 
-# Rate limiting configuration
-MAX_API_CALLS_PER_MINUTE = 10  # Conservative limit
-MIN_TIME_BETWEEN_CALLS = 2  # Seconds between calls
+# Rate limiting configuration - Conservative limits to avoid hitting Google API limits
+MAX_API_CALLS_PER_MINUTE = 15  # Google Sheets allows 100/minute, but we'll be conservative
+MAX_API_CALLS_PER_HOUR = 200   # Google Sheets allows 1000/hour, but we'll be conservative
 
-def check_rate_limit():
-    """Check if we can make an API call without hitting rate limits"""
+def check_api_rate_limit():
+    """Check if we're within safe API rate limits - returns status but doesn't block"""
     current_time = time.time()
     
-    # Remove calls older than 1 minute
+    # Remove calls older than 1 minute and 1 hour
     st.session_state.api_call_times = [
         call_time for call_time in st.session_state.api_call_times 
-        if current_time - call_time < 60
+        if current_time - call_time < 3600  # Keep last hour of calls
     ]
     
-    # Check if we're within rate limits
-    if len(st.session_state.api_call_times) >= MAX_API_CALLS_PER_MINUTE:
-        return False, "Rate limit reached. Please wait a minute before refreshing data."
+    # Count recent calls
+    calls_last_minute = len([
+        call_time for call_time in st.session_state.api_call_times 
+        if current_time - call_time < 60
+    ])
     
-    # Check minimum time between calls
-    if st.session_state.api_call_times and (current_time - st.session_state.api_call_times[-1]) < MIN_TIME_BETWEEN_CALLS:
-        return False, f"Please wait {MIN_TIME_BETWEEN_CALLS} seconds between data refreshes."
+    calls_last_hour = len(st.session_state.api_call_times)
     
-    return True, ""
+    # Check if we're approaching limits
+    minute_warning = calls_last_minute >= MAX_API_CALLS_PER_MINUTE * 0.8  # 80% of limit
+    hour_warning = calls_last_hour >= MAX_API_CALLS_PER_HOUR * 0.8       # 80% of limit
+    
+    minute_exceeded = calls_last_minute >= MAX_API_CALLS_PER_MINUTE
+    hour_exceeded = calls_last_hour >= MAX_API_CALLS_PER_HOUR
+    
+    return {
+        'calls_last_minute': calls_last_minute,
+        'calls_last_hour': calls_last_hour,
+        'minute_warning': minute_warning,
+        'hour_warning': hour_warning,
+        'minute_exceeded': minute_exceeded,
+        'hour_exceeded': hour_exceeded,
+        'can_make_call': not (minute_exceeded or hour_exceeded)
+    }
 
 def record_api_call():
     """Record that an API call was made"""
     st.session_state.api_call_times.append(time.time())
+
+def clear_cache_for_team(team_name):
+    """Clear cached data for specific team"""
+    cache_key = f"cached_data_{team_name}"
+    cache_time_key = f"cache_time_{team_name}"
+    
+    # Clear session state cache
+    if cache_key in st.session_state:
+        del st.session_state[cache_key]
+    if cache_time_key in st.session_state:
+        del st.session_state[cache_time_key]
 
 @st.cache_resource
 def init_google_sheets():
@@ -111,18 +137,37 @@ def get_or_create_worksheet(team_name):
         st.error(f"Failed to access worksheet for {team_name}: {str(e)}")
         return None
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes to reduce API calls
-def load_data(team_name):
-    """Load winner data from Google Sheets for selected team with caching and rate limiting"""
-    can_call, error_msg = check_rate_limit()
-    if not can_call:
-        # If we can't make API call due to rate limiting, try to use cached data
-        if f"cached_data_{team_name}" in st.session_state:
-            st.warning(f"Using cached data: {error_msg}")
-            return st.session_state[f"cached_data_{team_name}"]
+def load_data(team_name, force_refresh=False):
+    """Load winner data from Google Sheets for selected team with smart caching and rate limiting"""
+    
+    # Create cache key
+    cache_key = f"cached_data_{team_name}"
+    cache_time_key = f"cache_time_{team_name}"
+    
+    # Check if we have cached data and not forcing refresh
+    if not force_refresh and cache_key in st.session_state and cache_time_key in st.session_state:
+        cache_age = time.time() - st.session_state[cache_time_key]
+        if cache_age < 60:  # Use cache if less than 60 seconds old
+            return st.session_state[cache_key]
+    
+    # Check API rate limits
+    rate_status = check_api_rate_limit()
+    
+    # If we've exceeded limits, use cached data if available
+    if not rate_status['can_make_call']:
+        if cache_key in st.session_state:
+            if rate_status['minute_exceeded']:
+                st.warning("⚠️ API rate limit reached (too many requests per minute). Using cached data.")
+            elif rate_status['hour_exceeded']:
+                st.warning("⚠️ API rate limit reached (too many requests per hour). Using cached data.")
+            return st.session_state[cache_key]
         else:
-            st.error(error_msg)
+            st.error("❌ API rate limit reached and no cached data available. Please wait before trying again.")
             return []
+    
+    # Show warning if approaching limits
+    if rate_status['minute_warning'] or rate_status['hour_warning']:
+        st.warning(f"⚠️ Approaching API limits: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per minute, {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} per hour")
     
     worksheet = get_or_create_worksheet(team_name)
     if worksheet is None:
@@ -135,25 +180,32 @@ def load_data(team_name):
         # Get all records (skip header row)
         records = worksheet.get_all_records()
         
-        # Cache the data in session state as backup
-        st.session_state[f"cached_data_{team_name}"] = records
+        # Cache the data in session state with timestamp
+        st.session_state[cache_key] = records
+        st.session_state[cache_time_key] = time.time()
         
         return records
     except Exception as e:
         # If API call fails but we have cached data, use it
-        if f"cached_data_{team_name}" in st.session_state:
+        if cache_key in st.session_state:
             st.warning(f"API call failed, using cached data: {str(e)}")
-            return st.session_state[f"cached_data_{team_name}"]
+            return st.session_state[cache_key]
         else:
             st.error(f"Error loading data from Google Sheets for {team_name}: {str(e)}")
             return []
 
 def save_winner_to_sheets(winner_name, race_date):
-    """Add a new winner directly to Google Sheets for selected team with rate limiting"""
-    can_call, error_msg = check_rate_limit()
-    if not can_call:
-        st.error(error_msg)
-        return False
+    """Add a new winner directly to Google Sheets for selected team"""
+    # Check API rate limits but allow the save (this is important functionality)
+    rate_status = check_api_rate_limit()
+    
+    if not rate_status['can_make_call']:
+        if rate_status['minute_exceeded']:
+            st.error("❌ Cannot save winner: Too many API requests per minute. Please wait a moment and try again.")
+            return False
+        elif rate_status['hour_exceeded']:
+            st.error("❌ Cannot save winner: Too many API requests per hour. Please try again later.")
+            return False
     
     worksheet = get_or_create_worksheet(st.session_state.selected_team)
     if worksheet is None:
@@ -169,9 +221,8 @@ def save_winner_to_sheets(winner_name, race_date):
         ]
         worksheet.append_row(new_row)
         
-        # Clear cached data to force refresh
-        if f"cached_data_{st.session_state.selected_team}" in st.session_state:
-            del st.session_state[f"cached_data_{st.session_state.selected_team}"]
+        # Clear cached data to force refresh on next load
+        clear_cache_for_team(st.session_state.selected_team)
         
         return True
     except Exception as e:
@@ -257,6 +308,8 @@ def calculate_statistics():
         'all_data': df
     }
 
+# Check for pending refresh (auto-refresh logic) - REMOVED this section as it was causing issues
+
 # Show setup instructions if Google Sheets is not configured
 if 'google_sheets' not in st.secrets or 'sheet_url' not in st.secrets:
     st.error("🔧 Google Sheets Setup Required")
@@ -325,7 +378,7 @@ with col2:
     )
     if team_option != st.session_state.selected_team:
         st.session_state.selected_team = team_option
-        st.cache_data.clear()  # Clear cache when switching teams
+        clear_cache_for_team(team_option)  # Clear cache for new team
         st.rerun()
 
 # Create tabs
@@ -446,11 +499,11 @@ with tab2:
     if st.button("🏆 Add Winner", type="primary"):
         if winner_name:
             with st.spinner("Saving to team sheet..."):
-                if save_winner_to_sheets(winner_name, race_date):
+                success = save_winner_to_sheets(winner_name, race_date)
+                if success:
                     st.success(f"🎉 {winner_name} added as champion for {race_date}!")
                     st.balloons()
-                    # Clear the cache to refresh data
-                    st.cache_data.clear()
+                    st.info("📊 Click the 'Wall of Champions' tab and use the refresh button to see updated statistics!")
                 else:
                     st.error("Failed to add winner. Please check your Google Sheets connection.")
         else:
@@ -459,29 +512,24 @@ with tab2:
     # Show ALL entries instead of just recent ones
     st.subheader("📊 All Race Results")
     
-    # Add refresh button with rate limiting
-    col1, col2, col3 = st.columns([1, 1, 2])
+    # Add refresh button
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
         if st.button("🔄 Refresh Data"):
-            can_refresh, msg = check_rate_limit()
-            if can_refresh:
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(msg)
+            # Force fresh data load
+            data_fresh = load_data(st.session_state.selected_team, force_refresh=True)
+            st.rerun()
     
     with col2:
-        # Show API rate limit status
-        remaining_calls = MAX_API_CALLS_PER_MINUTE - len(st.session_state.api_call_times)
-        if remaining_calls > 5:
-            st.success(f"✅ {remaining_calls} API calls remaining")
-        elif remaining_calls > 0:
-            st.warning(f"⚠️ {remaining_calls} API calls remaining")
+        # Show API usage status
+        rate_status = check_api_rate_limit()
+        if rate_status['minute_warning'] or rate_status['hour_warning']:
+            st.warning(f"⚠️ API Usage: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per min")
         else:
-            st.error("❌ Rate limit reached")
+            st.info(f"✅ API Usage: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per min")
     
     with st.spinner("Loading all race results..."):
-        data = load_data(st.session_state.selected_team)
+        data = load_data(st.session_state.selected_team, force_refresh=False)
         if data:
             df = pd.DataFrame(data)
             df['date'] = pd.to_datetime(df['date'])
@@ -531,6 +579,24 @@ with tab2:
 
 with tab3:
     st.header("🏆 Champions Wall & Statistics")
+    
+    # Add refresh button for statistics
+    col_refresh, col_status = st.columns([1, 3])
+    with col_refresh:
+        if st.button("🔄 Refresh Stats"):
+            # Force refresh by clearing cache and reloading
+            clear_cache_for_team(st.session_state.selected_team)
+            st.rerun()
+    
+    with col_status:
+        # Show API usage status
+        rate_status = check_api_rate_limit()
+        if not rate_status['can_make_call']:
+            st.error(f"❌ API limit reached: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per min, {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} per hour")
+        elif rate_status['minute_warning'] or rate_status['hour_warning']:
+            st.warning(f"⚠️ API Usage: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per min, {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} per hour")
+        else:
+            st.success(f"✅ API Usage: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per min, {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} per hour")
     
     with st.spinner("Loading statistics from team sheet..."):
         stats = calculate_statistics()
@@ -771,13 +837,13 @@ with st.sidebar:
     - 🏆 Hall of Fame system
     - 📈 Visual charts and graphs
     - ☁️ Cloud storage with Google Sheets
-    - 🚦 Rate limiting to prevent API overuse
+    - 🔄 Smart refresh with API protection
     
     **How to use:**
     1. Select your team at the top
     2. Play the duck race game in the first tab
     3. Record the winner in the second tab
-    4. View awesome stats in the third tab
+    4. View stats in the third tab (use refresh button after adding winners)
     
     **Data Storage:**
     All data is stored in separate Google Sheets tabs for each team:
@@ -790,20 +856,37 @@ with st.sidebar:
     
     st.divider()
     
+    st.divider()
+    
     # API Rate Limiting Status
-    st.subheader("🚦 API Status")
-    remaining_calls = MAX_API_CALLS_PER_MINUTE - len(st.session_state.api_call_times)
+    st.subheader("🚦 API Protection Status")
+    rate_status = check_api_rate_limit()
     
-    if remaining_calls > 5:
-        st.success(f"✅ {remaining_calls}/{MAX_API_CALLS_PER_MINUTE} calls available")
-    elif remaining_calls > 0:
-        st.warning(f"⚠️ {remaining_calls}/{MAX_API_CALLS_PER_MINUTE} calls remaining")
+    col1, col2 = st.columns(2)
+    with col1:
+        if rate_status['calls_last_minute'] == 0:
+            st.success("✅ No recent API calls")
+        elif rate_status['minute_warning']:
+            st.warning(f"⚠️ {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} calls/min")
+        elif rate_status['minute_exceeded']:
+            st.error(f"❌ {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} calls/min (LIMIT REACHED)")
+        else:
+            st.info(f"📊 {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} calls/min")
+    
+    with col2:
+        if rate_status['calls_last_hour'] == 0:
+            st.success("✅ No API calls this hour")
+        elif rate_status['hour_warning']:
+            st.warning(f"⚠️ {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} calls/hour")
+        elif rate_status['hour_exceeded']:
+            st.error(f"❌ {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} calls/hour (LIMIT REACHED)")
+        else:
+            st.info(f"📊 {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} calls/hour")
+    
+    if rate_status['can_make_call']:
+        st.caption("✅ Safe to make API requests")
     else:
-        st.error(f"❌ Rate limit reached")
-        next_reset = 60 - (time.time() - min(st.session_state.api_call_times)) if st.session_state.api_call_times else 0
-        st.caption(f"Resets in ~{int(next_reset)} seconds")
-    
-    st.caption("Data is cached for 5 minutes to reduce API usage")
+        st.caption("⏳ Using cached data to protect against API limits")
     
     st.divider()
     
@@ -812,17 +895,10 @@ with st.sidebar:
     if worksheet:
         st.success(f"✅ Connected to {st.session_state.selected_team} sheet")
         
-        # Manual refresh with rate limiting
-        can_refresh, msg = check_rate_limit()
-        if st.button("🔄 Force Refresh Data", disabled=not can_refresh):
-            if can_refresh:
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.error(msg)
-        
-        if not can_refresh:
-            st.caption("⏳ Refresh temporarily disabled due to rate limiting")
+        # Manual refresh button
+        if st.button("🔄 Force Refresh Data"):
+            clear_cache_for_team(st.session_state.selected_team)
+            st.rerun()
     else:
         st.error("❌ Not connected to Google Sheets")
     
@@ -843,5 +919,5 @@ with st.sidebar:
     other_team = "Collab Cloud" if st.session_state.selected_team == "Clean Room" else "Clean Room"
     if st.button(f"Switch to {other_team}", use_container_width=True):
         st.session_state.selected_team = other_team
-        st.cache_data.clear()
+        clear_cache_for_team(other_team)
         st.rerun()
