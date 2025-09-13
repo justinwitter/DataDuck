@@ -759,23 +759,37 @@ with tab3:
         
         st.divider()
         
-        # Hall of Fame
+        # Hall of Fame with Platinum Tier
         st.subheader("🏛️ Hall of Fame")
         
-        col1, col2, col3 = st.columns(3)
+        # Create 4 columns for the tiers
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
+            st.markdown("### 💠 Platinum Tier")
+            st.caption("7+ Wins")
+            platinum_champions = stats['win_counts'][stats['win_counts'] >= 7]
+            
+            if len(platinum_champions) > 0:
+                for champion, wins in platinum_champions.items():
+                    st.markdown(f"💠 **{champion}** - {wins} wins")
+            else:
+                st.markdown("*No platinum tier champions yet*")
+        
+        with col2:
             st.markdown("### 🥇 Gold Tier")
-            st.caption("5+ Wins")
-            gold_champions = stats['win_counts'][stats['win_counts'] >= 5]
+            st.caption("5-6 Wins")
+            gold_champions = stats['win_counts'][
+                (stats['win_counts'] >= 5) & (stats['win_counts'] < 7)
+            ]
             
             if len(gold_champions) > 0:
                 for champion, wins in gold_champions.items():
-                    st.markdown(f"🏆 **{champion}** - {wins} wins")
+                    st.markdown(f"🥇 **{champion}** - {wins} wins")
             else:
                 st.markdown("*No gold tier champions yet*")
         
-        with col2:
+        with col3:
             st.markdown("### 🥈 Silver Tier")
             st.caption("3-4 Wins")
             silver_champions = stats['win_counts'][
@@ -788,7 +802,7 @@ with tab3:
             else:
                 st.markdown("*No silver tier champions yet*")
         
-        with col3:
+        with col4:
             st.markdown("### 🥉 Bronze Tier")
             st.caption("2 Wins")
             bronze_champions = stats['win_counts'][stats['win_counts'] == 2]
@@ -834,8 +848,13 @@ with st.sidebar:
     - 🏁 Access to the duck race game
     - 📝 Easy winner entry
     - 📊 Comprehensive statistics
-    - 🏆 Hall of Fame system
+    - 🏆 Hall of Fame system with 4 tiers:
+      - 💠 Platinum (7+ wins)
+      - 🥇 Gold (5-6 wins)
+      - 🥈 Silver (3-4 wins)
+      - 🥉 Bronze (2 wins)
     - 📈 Visual charts and graphs
+    - 📊 Statistical significance analysis
     - ☁️ Cloud storage with Google Sheets
     - 🔄 Smart refresh with API protection
     
