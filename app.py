@@ -759,16 +759,29 @@ with tab3:
         
         st.divider()
         
-        # Hall of Fame with Platinum Tier
+        # Hall of Fame with Diamond Tier
         st.subheader("🏛️ Hall of Fame")
         
-        # Create 4 columns for the tiers
-        col1, col2, col3, col4 = st.columns(4)
+        # Create 5 columns for the tiers
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         with col1:
+            st.markdown("### 💎 Diamond Tier")
+            st.caption("8+ Wins")
+            diamond_champions = stats['win_counts'][stats['win_counts'] >= 8]
+            
+            if len(diamond_champions) > 0:
+                for champion, wins in diamond_champions.items():
+                    st.markdown(f"💎 **{champion}** - {wins} wins")
+            else:
+                st.markdown("*No diamond tier champions yet*")
+        
+        with col2:
             st.markdown("### 💠 Platinum Tier")
-            st.caption("7+ Wins")
-            platinum_champions = stats['win_counts'][stats['win_counts'] >= 7]
+            st.caption("6-7 Wins")
+            platinum_champions = stats['win_counts'][
+                (stats['win_counts'] >= 6) & (stats['win_counts'] < 8)
+            ]
             
             if len(platinum_champions) > 0:
                 for champion, wins in platinum_champions.items():
@@ -776,11 +789,11 @@ with tab3:
             else:
                 st.markdown("*No platinum tier champions yet*")
         
-        with col2:
+        with col3:
             st.markdown("### 🥇 Gold Tier")
-            st.caption("5-6 Wins")
+            st.caption("4-5 Wins")
             gold_champions = stats['win_counts'][
-                (stats['win_counts'] >= 5) & (stats['win_counts'] < 7)
+                (stats['win_counts'] >= 4) & (stats['win_counts'] < 6)
             ]
             
             if len(gold_champions) > 0:
@@ -789,11 +802,11 @@ with tab3:
             else:
                 st.markdown("*No gold tier champions yet*")
         
-        with col3:
+        with col4:
             st.markdown("### 🥈 Silver Tier")
-            st.caption("3-4 Wins")
+            st.caption("2-3 Wins")
             silver_champions = stats['win_counts'][
-                (stats['win_counts'] >= 3) & (stats['win_counts'] < 5)
+                (stats['win_counts'] >= 2) & (stats['win_counts'] < 4)
             ]
             
             if len(silver_champions) > 0:
@@ -802,10 +815,10 @@ with tab3:
             else:
                 st.markdown("*No silver tier champions yet*")
         
-        with col4:
+        with col5:
             st.markdown("### 🥉 Bronze Tier")
-            st.caption("2 Wins")
-            bronze_champions = stats['win_counts'][stats['win_counts'] == 2]
+            st.caption("1 Win")
+            bronze_champions = stats['win_counts'][stats['win_counts'] == 1]
             
             if len(bronze_champions) > 0:
                 for champion, wins in bronze_champions.items():
@@ -848,11 +861,12 @@ with st.sidebar:
     - 🏁 Access to the duck race game
     - 📝 Easy winner entry
     - 📊 Comprehensive statistics
-    - 🏆 Hall of Fame system with 4 tiers:
-      - 💠 Platinum (7+ wins)
-      - 🥇 Gold (5-6 wins)
-      - 🥈 Silver (3-4 wins)
-      - 🥉 Bronze (2 wins)
+    - 🏆 Hall of Fame system with 5 tiers:
+      - 💎 Diamond (8+ wins)
+      - 💠 Platinum (6-7 wins)
+      - 🥇 Gold (4-5 wins)
+      - 🥈 Silver (2-3 wins)
+      - 🥉 Bronze (1 win)
     - 📈 Visual charts and graphs
     - 📊 Statistical significance analysis
     - ☁️ Cloud storage with Google Sheets
