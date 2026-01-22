@@ -229,8 +229,13 @@ def save_winner_to_sheets(winner_name, race_date):
         st.error(f"Error saving to Google Sheets for {st.session_state.selected_team}: {str(e)}")
         return False
 
-def calculate_statistics():
-    """Calculate comprehensive statistics from the winner data"""
+def calculate_statistics(start_date=None, end_date=None):
+    """Calculate comprehensive statistics from the winner data
+    
+    Args:
+        start_date: Optional start date filter (inclusive)
+        end_date: Optional end date filter (inclusive)
+    """
     data = load_data(st.session_state.selected_team)
     
     if not data:
@@ -250,6 +255,16 @@ def calculate_statistics():
         (df['winner'] != 'nan') &
         (df['winner'] != 'None')
     ]
+    
+    if len(df) == 0:
+        return None
+    
+    # Apply date filters
+    if start_date is not None:
+        df = df[df['date'] >= pd.to_datetime(start_date)]
+    
+    if end_date is not None:
+        df = df[df['date'] <= pd.to_datetime(end_date)]
     
     if len(df) == 0:
         return None
@@ -413,9 +428,9 @@ with tab1:
     
     # Set default players based on team
     if st.session_state.selected_team == "Clean Room":
-        default_players = ["Nate", "Justin", "Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya", "Vikram"]
+        default_players = ["Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya"]
     else:  # Collab Cloud
-        default_players = ["Jeffrey", "Jacob", "Ryan","Gerardo", "Mazie", "Derek", "Jon", "Hafeez", "Harishwar", "Luciano"]
+        default_players = ["Jeffrey", "Jacob", "Ryan","Gerardo", "Mazie", "Derek", "Jon", "Hafeez", "Harishwar", "Luciano","Justin","Evan"]
     
     if team_key not in st.session_state:
         st.session_state[team_key] = default_players
@@ -580,6 +595,52 @@ with tab2:
 with tab3:
     st.header("🏆 Champions Wall & Statistics")
     
+    # Date filter section
+    st.subheader("📅 Date Filter")
+    
+    # Default start date: January 22, 2026
+    default_start_date = date(2026, 1, 22)
+    
+    col_date1, col_date2, col_date3 = st.columns([2, 2, 1])
+    
+    with col_date1:
+        filter_start_date = st.date_input(
+            "Start Date (inclusive)",
+            value=default_start_date,
+            help="Only show races on or after this date"
+        )
+    
+    with col_date2:
+        filter_end_date = st.date_input(
+            "End Date (inclusive)",
+            value=None,
+            help="Only show races on or before this date (leave empty for no end filter)"
+        )
+    
+    with col_date3:
+        st.write("")  # Spacer
+        st.write("")  # Spacer
+        if st.button("🔄 Reset Filter"):
+            st.session_state['reset_date_filter'] = True
+            st.rerun()
+    
+    # Check if we need to reset (this will be handled by the rerun with default values)
+    if st.session_state.get('reset_date_filter', False):
+        st.session_state['reset_date_filter'] = False
+        filter_start_date = default_start_date
+        filter_end_date = None
+    
+    # Display active filter info
+    if filter_start_date or filter_end_date:
+        filter_info = "🔍 **Active Filter:** "
+        if filter_start_date:
+            filter_info += f"From {filter_start_date.strftime('%Y-%m-%d')}"
+        if filter_end_date:
+            filter_info += f" to {filter_end_date.strftime('%Y-%m-%d')}"
+        st.info(filter_info)
+    
+    st.divider()
+    
     # Add refresh button for statistics
     col_refresh, col_status = st.columns([1, 3])
     with col_refresh:
@@ -599,10 +660,14 @@ with tab3:
             st.success(f"✅ API Usage: {rate_status['calls_last_minute']}/{MAX_API_CALLS_PER_MINUTE} per min, {rate_status['calls_last_hour']}/{MAX_API_CALLS_PER_HOUR} per hour")
     
     with st.spinner("Loading statistics from team sheet..."):
-        stats = calculate_statistics()
+        # Pass the date filters to calculate_statistics
+        stats = calculate_statistics(
+            start_date=filter_start_date,
+            end_date=filter_end_date
+        )
     
     if stats is None:
-        st.info("No race data available yet. Add some winners to see amazing stats!")
+        st.info("No race data available for the selected date range. Adjust the date filter or add some winners to see amazing stats!")
     else:
         # Top metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -759,8 +824,8 @@ with tab3:
         
         st.divider()
         
-        # Hall of Fame with Diamond Tier
-        st.subheader("🏛️ Hall of Fame")
+        # Current Tiers (formerly Hall of Fame)
+        st.subheader("🎖️ Current Tiers")
         
         # Create 5 columns for the tiers
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -826,27 +891,70 @@ with tab3:
             else:
                 st.markdown("*No bronze tier champions yet*")
         
-        # Summary statistics
+        
+        # Hall of Fame - Yearly Tier Winners
         st.divider()
-        st.subheader("📊 Summary Statistics")
+        st.subheader("🏛️ Hall of Fame - Yearly Tier Winners")
+        st.caption("Celebrating our annual champions in each tier")
         
-        col1, col2, col3, col4 = st.columns(4)
+        # Team-specific Hall of Fame data
+        if st.session_state.selected_team == "Clean Room":
+            hall_of_fame_data = {
+                2025: {
+                    "Diamond": {"name": "-", "wins": "-"},
+                    "Platinum": {"name": "Jacqueline", "wins": "7"},
+                    "Gold": {"name": "Justin", "wins": "4"},
+                    "Silver": {"name": "Sam", "wins": "3"},
+                    "Bronze": {"name": "-", "wins": "-"},
+                },
+            }
+        else:  # Collab Cloud
+            hall_of_fame_data = {
+                2025: {
+                    "Diamond": {"name": "-", "wins": "-"},
+                    "Platinum": {"name": "-", "wins": "-"},
+                    "Gold": {"name": "Derek", "wins": "4"},
+                    "Silver": {"name": "Ryan", "wins": "3"},
+                    "Bronze": {"name": "Harishwar", "wins": "1"},
+                }
+            }
         
-        with col1:
-            avg_wins = stats['win_counts'].mean()
-            st.metric("Average Wins per Player", f"{avg_wins:.1f}")
-        
-        with col2:
-            max_wins = stats['win_counts'].max()
-            st.metric("Most Wins by One Player", max_wins)
-        
-        with col3:
-            one_time_winners = len(stats['win_counts'][stats['win_counts'] == 1])
-            st.metric("One-Time Winners", one_time_winners)
-        
-        with col4:
-            multi_winners = len(stats['win_counts'][stats['win_counts'] > 1])
-            st.metric("Multi-Time Winners", multi_winners)
+        # Display Hall of Fame by year
+        for year in sorted(hall_of_fame_data.keys(), reverse=True):
+            year_data = hall_of_fame_data[year]
+            
+            with st.expander(f"🏆 {year} Champions", expanded=(year == 2025)):
+                hof_col1, hof_col2, hof_col3, hof_col4, hof_col5 = st.columns(5)
+                
+                with hof_col1:
+                    st.markdown("#### 💎 Diamond")
+                    st.markdown(f"**{year_data['Diamond']['name']}**")
+                    if year_data['Diamond']['wins'] != "-":
+                        st.caption(f"{year_data['Diamond']['wins']} wins")
+                
+                with hof_col2:
+                    st.markdown("#### 💠 Platinum")
+                    st.markdown(f"**{year_data['Platinum']['name']}**")
+                    if year_data['Platinum']['wins'] != "-":
+                        st.caption(f"{year_data['Platinum']['wins']} wins")
+                
+                with hof_col3:
+                    st.markdown("#### 🥇 Gold")
+                    st.markdown(f"**{year_data['Gold']['name']}**")
+                    if year_data['Gold']['wins'] != "-":
+                        st.caption(f"{year_data['Gold']['wins']} wins")
+                
+                with hof_col4:
+                    st.markdown("#### 🥈 Silver")
+                    st.markdown(f"**{year_data['Silver']['name']}**")
+                    if year_data['Silver']['wins'] != "-":
+                        st.caption(f"{year_data['Silver']['wins']} wins")
+                
+                with hof_col5:
+                    st.markdown("#### 🥉 Bronze")
+                    st.markdown(f"**{year_data['Bronze']['name']}**")
+                    if year_data['Bronze']['wins'] != "-":
+                        st.caption(f"{year_data['Bronze']['wins']} wins")
 
 # Sidebar with app info
 with st.sidebar:
@@ -861,6 +969,7 @@ with st.sidebar:
     - 🏁 Access to the duck race game
     - 📝 Easy winner entry
     - 📊 Comprehensive statistics
+    - 📅 Date filtering for statistics
     - 🏆 Hall of Fame system with 5 tiers:
       - 💎 Diamond (8+ wins)
       - 💠 Platinum (6-7 wins)
