@@ -430,7 +430,7 @@ with tab1:
     if st.session_state.selected_team == "Clean Room":
         default_players = ["Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya"]
     else:  # Collab Cloud
-        default_players = ["Jeffrey", "Jacob", "Ryan","Gerardo", "Mazie", "Derek", "Jon", "Hafeez", "Harishwar", "Luciano","Justin","Evan"]
+        default_players = ["Alan","Jeffrey", "Jacob", "Ryan","Gerardo", "Mazie", "Derek", "Jon", "Hafeez", "Harishwar", "Luciano","Justin","Evan"]
     
     if team_key not in st.session_state:
         st.session_state[team_key] = default_players
