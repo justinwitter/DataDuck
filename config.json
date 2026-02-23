@@ -1,0 +1,11 @@
+{
+  "default_team": "Clean Room",
+  "teams": {
+    "Clean Room": {
+      "players": ["Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya"]
+    },
+    "Collab Cloud": {
+      "players": ["Alan", "Jeffrey", "Jacob", "Ryan", "Gerardo", "Mazie", "Derek", "Jon", "Hafeez", "Harishwar", "Luciano", "Justin", "Evan"]
+    }
+  }
+}

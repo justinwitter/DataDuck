@@ -11,11 +11,19 @@ import json
 import seaborn as sns
 import time
 
+# Load team/player config
+with open("config.json") as _f:
+    _config = json.load(_f)
+TEAM_NAMES = list(_config["teams"].keys())
+DEFAULT_TEAM = _config.get("default_team", TEAM_NAMES[0])
+TEAM_PLAYERS = {team: data["players"] for team, data in _config["teams"].items()}
+
 # Set page config
 st.set_page_config(
     page_title="DataDuck",
     page_icon="🦆",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
 # Set matplotlib style
@@ -30,7 +38,7 @@ SCOPES = [
 
 # Initialize team selection in session state
 if 'selected_team' not in st.session_state:
-    st.session_state.selected_team = "Clean Room"  # Default team
+    st.session_state.selected_team = DEFAULT_TEAM
 
 # Initialize API call tracking for rate limiting
 if 'api_call_times' not in st.session_state:
@@ -193,6 +201,31 @@ def load_data(team_name, force_refresh=False):
         else:
             st.error(f"Error loading data from Google Sheets for {team_name}: {str(e)}")
             return []
+
+def delete_winner_from_sheets(winner_name, race_date_str):
+    """Delete a specific winner entry from Google Sheets by matching winner + date"""
+    worksheet = get_or_create_worksheet(st.session_state.selected_team)
+    if worksheet is None:
+        return False
+
+    try:
+        record_api_call()
+        all_values = worksheet.get_all_values()  # includes header row
+
+        for i, row in enumerate(all_values):
+            if i == 0:
+                continue  # skip header
+            if row[0] == winner_name and row[1] == race_date_str:
+                worksheet.delete_rows(i + 1)  # gspread rows are 1-indexed
+                clear_cache_for_team(st.session_state.selected_team)
+                return True
+
+        st.error("Entry not found in sheet.")
+        return False
+    except Exception as e:
+        st.error(f"Error deleting from Google Sheets: {str(e)}")
+        return False
+
 
 def save_winner_to_sheets(winner_name, race_date):
     """Add a new winner directly to Google Sheets for selected team"""
@@ -387,8 +420,8 @@ with col1:
 with col2:
     team_option = st.selectbox(
         "Team:",
-        ["Clean Room", "Collab Cloud"],
-        index=0 if st.session_state.selected_team == "Clean Room" else 1,
+        TEAM_NAMES,
+        index=TEAM_NAMES.index(st.session_state.selected_team),
         key="team_selector"
     )
     if team_option != st.session_state.selected_team:
@@ -426,11 +459,8 @@ with tab1:
     reset_key = f'reset_counter_{st.session_state.selected_team.replace(" ", "_")}'
     prev_text_key = f'prev_text_{st.session_state.selected_team.replace(" ", "_")}'
     
-    # Set default players based on team
-    if st.session_state.selected_team == "Clean Room":
-        default_players = ["Bjorn", "Jacqueline", "Adi", "Brayden", "Sam", "Ryan", "Lavanya"]
-    else:  # Collab Cloud
-        default_players = ["Alan","Jeffrey", "Jacob", "Ryan","Gerardo", "Mazie", "Derek", "Jon", "Hafeez", "Harishwar", "Luciano","Justin","Evan"]
+    # Set default players based on team (edit config.json to change these)
+    default_players = TEAM_PLAYERS.get(st.session_state.selected_team, [])
     
     if team_key not in st.session_state:
         st.session_state[team_key] = default_players
@@ -511,16 +541,21 @@ with tab2:
         # Show current player count for context
         st.info(f"📊 {len(current_team_players)} players available to select from.\n\nAdd or edit players in the Duck Race tab if needed.")
     
-    if st.button("🏆 Add Winner", type="primary"):
+    if 'adding_winner' not in st.session_state:
+        st.session_state.adding_winner = False
+
+    if st.button("🏆 Add Winner", type="primary", disabled=st.session_state.adding_winner):
         if winner_name:
+            st.session_state.adding_winner = True
             with st.spinner("Saving to team sheet..."):
                 success = save_winner_to_sheets(winner_name, race_date)
-                if success:
-                    st.success(f"🎉 {winner_name} added as champion for {race_date}!")
-                    st.balloons()
-                    st.info("📊 Click the 'Wall of Champions' tab and use the refresh button to see updated statistics!")
-                else:
-                    st.error("Failed to add winner. Please check your Google Sheets connection.")
+            st.session_state.adding_winner = False
+            if success:
+                st.success(f"🎉 {winner_name} added as champion for {race_date}!")
+                st.balloons()
+                st.info("📊 Click the 'Wall of Champions' tab and use the refresh button to see updated statistics!")
+            else:
+                st.error("Failed to add winner. Please check your Google Sheets connection.")
         else:
             st.error("Please select a winner from the dropdown.")
     
@@ -587,6 +622,31 @@ with tab2:
                 with col3:
                     most_wins = df['winner'].value_counts().iloc[0] if len(df) > 0 else 0
                     st.metric("Most Wins by One Player", most_wins)
+
+                st.divider()
+                st.subheader("🗑️ Delete an Entry")
+
+                # Build options from the sorted display (most recent first)
+                delete_options = [
+                    f"{row['Champion']} — {row['Date']}"
+                    for _, row in df_display.iterrows()
+                ]
+                selected_entry = st.selectbox("Select entry to delete:", delete_options, key="delete_selectbox")
+
+                if 'deleting_winner' not in st.session_state:
+                    st.session_state.deleting_winner = False
+
+                if st.button("🗑️ Delete Selected Entry", type="secondary", disabled=st.session_state.deleting_winner):
+                    winner_to_delete, date_to_delete = selected_entry.split(" — ")
+                    st.session_state.deleting_winner = True
+                    with st.spinner("Deleting entry..."):
+                        success = delete_winner_from_sheets(winner_to_delete, date_to_delete)
+                    st.session_state.deleting_winner = False
+                    if success:
+                        st.success(f"Deleted: {selected_entry}")
+                        st.rerun()
+                    else:
+                        st.error("Failed to delete entry.")
             else:
                 st.info("No valid race data found.")
         else:
